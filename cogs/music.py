@@ -186,9 +186,9 @@ class Music(commands.Cog):
         return self.players[guild.id]
     
     async def search_spotify(self, query: str) -> Optional[Dict]:
-      """Search for a track on Spotify"""
-        if not self.spotify:
-            return None
+    """Search for a track on Spotify"""  # 4 spaces
+    if not self.spotify:  # 4 spaces
+        return None  # 8 spaces (consistent with the if block)
         
         try:
             results = self.spotify.search(q=query, type='track', limit=1)
