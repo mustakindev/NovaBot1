@@ -1,0 +1,24 @@
+{
+    "default_settings": {
+        "leveling_enabled": true,
+        "ai_chat_enabled": false,
+        "welcome_enabled": false,
+        "autoroles_enabled": true,
+        "music_enabled": true,
+        "economy_enabled": true,
+        "tickets_enabled": true,
+        "giveaways_enabled": true,
+        "logging_enabled": false
+    },
+    "feature_flags": {
+        "beta_features": false,
+        "experimental_ai": false,
+        "premium_features": false
+    },
+    "system_settings": {
+        "max_warnings_before_action": 5,
+        "auto_cleanup_days": 30,
+        "max_tags_per_server": 100,
+        "max_giveaway_duration_days": 28
+    }
+}
