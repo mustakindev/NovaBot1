@@ -74,14 +74,22 @@ class Nova(commands.Bot):
     
     async def load_cogs(self) -> None:
         """Load all cogs from the cogs directory"""
-        cogs_dir = Path("cogs")
+        cogs_to_load = [
+            "cogs.moderation",
+            "cogs.music", 
+            "cogs.ai_chat",
+            "cogs.utility",
+            "cogs.fun",
+            "cogs.economy",
+            "cogs.tickets",
+            "cogs.autoroles",
+            "cogs.logging_cog",
+            "cogs.leveling",
+            "cogs.giveaways",
+            "cogs.custom"
+        ]
         
-        for cog_file in cogs_dir.glob("*.py"):
-            if cog_file.name.startswith("__"):
-                continue
-                
-            cog_name = f"cogs.{cog_file.stem}"
-            
+        for cog_name in cogs_to_load:
             try:
                 await self.load_extension(cog_name)
                 logger.info(f"Loaded cog: {cog_name}")
