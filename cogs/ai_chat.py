@@ -9,10 +9,15 @@ from typing import Optional
 import discord
 from discord import app_commands
 from discord.ext import commands
-import openai
 
 from utils.embeds import EmbedBuilder
-from utils.checks import has_permissions
+
+try:
+    import openai
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+    print("OpenAI library not installed - AI features disabled")
 
 
 class AIChat(commands.Cog):
@@ -22,8 +27,8 @@ class AIChat(commands.Cog):
         self.bot = bot
         self.openai_client = None
         
-        # Initialize OpenAI client if API key is available
-        if bot.config.OPENAI_API_KEY:
+        # Initialize OpenAI client if available and API key is set
+        if OPENAI_AVAILABLE and hasattr(bot.config, 'OPENAI_API_KEY') and bot.config.OPENAI_API_KEY:
             try:
                 self.openai_client = openai.AsyncOpenAI(api_key=bot.config.OPENAI_API_KEY)
             except Exception as e:
@@ -129,8 +134,11 @@ class AIChat(commands.Cog):
             return
         
         # Check if AI chat is enabled for this server
-        guild_data = await self.bot.db.server_settings.find_one({"guild_id": message.guild.id})
-        if not guild_data or not guild_data.get("ai_chat_enabled", False):
+        try:
+            guild_data = await self.bot.db.server_settings.find_one({"guild_id": message.guild.id})
+            if not guild_data or not guild_data.get("ai_chat_enabled", False):
+                return
+        except:
             return
         
         # Check if bot was mentioned or message starts with "nova"
