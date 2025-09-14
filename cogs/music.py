@@ -10,14 +10,19 @@ from urllib.parse import quote
 
 import aiohttp
 import discord
-import spotipy
+import youtube_dl
 from discord import app_commands
 from discord.ext import commands
-from spotipy.oauth2 import SpotifyClientCredentials
-import youtube_dl
 
 from utils.embeds import EmbedBuilder
 
+try:
+    import spotipy
+    from spotipy.oauth2 import SpotifyClientCredentials
+    SPOTIFY_AVAILABLE = True
+except ImportError:
+    SPOTIFY_AVAILABLE = False
+    print("Spotipy not installed - Spotify features disabled")
 
 # YouTube-dl configuration
 ytdl_format_options = {
@@ -129,10 +134,7 @@ class MusicPlayer:
             self.current = song
             self._skip_votes.clear()
             
-            self.voice_client.play(
-                source,
-                after=lambda e: asyncio.run_coroutine_threadsafe(self.play_next(), self.bot.loop)
-            )
+            self.voice_client.play(source, after=lambda e: asyncio.run_coroutine_threadsafe(self.play_next(), self.bot.loop))
         except Exception as e:
             print(f"Error playing song: {e}")
             await self.play_next()
@@ -171,8 +173,8 @@ class Music(commands.Cog):
         self.players: Dict[int, MusicPlayer] = {}
         self.spotify = None
         
-        # Initialize Spotify client if credentials are available
-        if bot.config.SPOTIFY_CLIENT_ID and bot.config.SPOTIFY_CLIENT_SECRET:
+        # Initialize Spotify client if available and credentials are set
+        if SPOTIFY_AVAILABLE and hasattr(bot.config, 'SPOTIFY_CLIENT_ID') and bot.config.SPOTIFY_CLIENT_ID and bot.config.SPOTIFY_CLIENT_SECRET:
             try:
                 client_credentials_manager = SpotifyClientCredentials(
                     client_id=bot.config.SPOTIFY_CLIENT_ID,
@@ -228,26 +230,172 @@ class Music(commands.Cog):
         
         return None
     
-    # --- Commands below ---
-    # (unchanged, already properly indented)
-    # play, pause, resume, skip, stop, queue, loop, volume, lyrics
-    # ...
-    
-    @commands.Cog.listener()
-    async def on_voice_state_update(self, member, before, after):
-        """Handle voice state updates"""
-        if member == self.bot.user:
+    @app_commands.command(name="play", description="🎵 Play music from YouTube or Spotify")
+    @app_commands.describe(query="Song name, YouTube URL, or Spotify URL to play")
+    async def play(self, interaction: discord.Interaction, query: str):
+        """Play music from various sources"""
+        if not interaction.user.voice:
+            embed = EmbedBuilder.error("You need to be in a voice channel to use this command!")
+            await interaction.response.send_message(embed=embed, ephemeral=True)
             return
         
-        # Check if bot is alone in voice channel
-        for guild_id, player in self.players.items():
-            if player.voice_client and player.voice_client.channel:
-                members = [m for m in player.voice_client.channel.members if not m.bot]
-                if not members:
-                    # Bot is alone, disconnect after a delay
-                    await asyncio.sleep(60)  # Wait 1 minute
-                    if player.voice_client and not [m for m in player.voice_client.channel.members if not m.bot]:
-                        await player.disconnect()
+        await interaction.response.defer()
+        
+        player = self.get_player(interaction.guild)
+        
+        # Connect to voice channel if not already connected
+        if not player.voice_client:
+            await player.connect(interaction.user.voice.channel)
+        
+        # Search for the song
+        result = await self.search_youtube(query)
+        
+        if not result or not result.get('url'):
+            embed = EmbedBuilder.error(f"No results found for: {query}")
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+        
+        song = Song(
+            title=result['title'],
+            url=result['url'],
+            requester=interaction.user,
+            duration=result.get('duration', 0)
+        )
+        
+        # If nothing is playing, start immediately
+        if not player.voice_client.is_playing() and not player.current:
+            player.current = song
+            await player.play_next()
+            
+            embed = EmbedBuilder.create(
+                title="🎵 Now Playing",
+                description=str(song),
+                color=discord.Color.from_rgb(221, 160, 221)
+            )
+            if result.get('thumbnail'):
+                embed.set_thumbnail(url=result['thumbnail'])
+        else:
+            player.add_song(song)
+            embed = EmbedBuilder.create(
+                title="🎵 Added to Queue",
+                description=str(song),
+                color=discord.Color.from_rgb(221, 160, 221)
+            )
+            embed.add_field(name="Position in Queue", value=str(len(player.queue)), inline=True)
+        
+        await interaction.followup.send(embed=embed)
+    
+    @app_commands.command(name="pause", description="⏸️ Pause the current song")
+    async def pause(self, interaction: discord.Interaction):
+        """Pause the current song"""
+        player = self.get_player(interaction.guild)
+        
+        if not player.voice_client or not player.voice_client.is_playing():
+            embed = EmbedBuilder.error("Nothing is currently playing!")
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        player.pause()
+        embed = EmbedBuilder.success("⏸️ Paused the music")
+        await interaction.response.send_message(embed=embed)
+    
+    @app_commands.command(name="resume", description="▶️ Resume the paused song")
+    async def resume(self, interaction: discord.Interaction):
+        """Resume the paused song"""
+        player = self.get_player(interaction.guild)
+        
+        if not player.voice_client or not player.voice_client.is_paused():
+            embed = EmbedBuilder.error("Music is not paused!")
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        player.resume()
+        embed = EmbedBuilder.success("▶️ Resumed the music")
+        await interaction.response.send_message(embed=embed)
+    
+    @app_commands.command(name="skip", description="⏭️ Skip the current song")
+    async def skip(self, interaction: discord.Interaction):
+        """Skip the current song"""
+        player = self.get_player(interaction.guild)
+        
+        if not player.voice_client or not player.current:
+            embed = EmbedBuilder.error("Nothing is currently playing!")
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        player.skip()
+        embed = EmbedBuilder.success("⏭️ Skipped the current song")
+        await interaction.response.send_message(embed=embed)
+    
+    @app_commands.command(name="stop", description="⏹️ Stop music and clear queue")
+    async def stop(self, interaction: discord.Interaction):
+        """Stop music and disconnect"""
+        player = self.get_player(interaction.guild)
+        
+        if not player.voice_client:
+            embed = EmbedBuilder.error("I'm not connected to a voice channel!")
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        await player.disconnect()
+        embed = EmbedBuilder.success("⏹️ Stopped music and disconnected")
+        await interaction.response.send_message(embed=embed)
+    
+    @app_commands.command(name="queue", description="📋 Show the current music queue")
+    async def queue(self, interaction: discord.Interaction):
+        """Display the current music queue"""
+        player = self.get_player(interaction.guild)
+        
+        if not player.current and not player.queue:
+            embed = EmbedBuilder.error("The queue is empty!")
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        embed = EmbedBuilder.create(
+            title="🎵 Music Queue",
+            color=discord.Color.from_rgb(221, 160, 221)
+        )
+        
+        if player.current:
+            embed.add_field(
+                name="🎵 Currently Playing",
+                value=str(player.current),
+                inline=False
+            )
+        
+        if player.queue:
+            queue_text = ""
+            for i, song in enumerate(player.queue[:10], 1):
+                queue_text += f"{i}. {song}\n"
+            
+            if len(player.queue) > 10:
+                queue_text += f"... and {len(player.queue) - 10} more songs"
+            
+            embed.add_field(
+                name="📋 Up Next",
+                value=queue_text or "Queue is empty",
+                inline=False
+            )
+        
+        embed.add_field(name="Loop Mode", value=player.loop_mode.title(), inline=True)
+        embed.add_field(name="Volume", value=f"{int(player.volume * 100)}%", inline=True)
+        
+        await interaction.response.send_message(embed=embed)
+    
+    @app_commands.command(name="volume", description="🔊 Set the music volume (0-100)")
+    @app_commands.describe(level="Volume level from 0 to 100")
+    async def volume(self, interaction: discord.Interaction, level: int):
+        """Set the music volume"""
+        if level < 0 or level > 100:
+            embed = EmbedBuilder.error("Volume must be between 0 and 100!")
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        player = self.get_player(interaction.guild)
+        player.set_volume(level / 100.0)
+        
+        embed = EmbedBuilder.success(f"🔊 Volume set to {level}%")
+        await interaction.response.send_message(embed=embed)
 
 
 async def setup(bot: commands.Bot):
